@@ -13,8 +13,6 @@
 
 @interface FXRefreshFooterView : UIView<UIScrollViewDelegate>
 
-@property (nonatomic, weak) id<IFXRefreshDelegate> delegate;
-
 + (instancetype) refreshForScrollView:(UIScrollView*)scrollView Footer:(UIView<IFXRefreshViewProtocol>*)stateView;
 
 - (void)setRefreshDelegate:(NSObject<UIScrollViewDelegate,IFXRefreshDelegate>*)delegate;

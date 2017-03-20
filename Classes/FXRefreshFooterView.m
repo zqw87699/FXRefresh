@@ -10,6 +10,7 @@
 #import "FXCommon.h"
 #import "UIScrollView+FXExtension.h"
 #import "Masonry.h"
+#import "ReactiveObjC.h"
 
 @interface FXRefreshFooterView()
 
@@ -31,7 +32,12 @@
     FXRefreshFooterView*footerView = [[FXRefreshFooterView alloc] init];
     if (footerView) {
         [scrollView addSubview:footerView];
-        [footerView setFrame:CGRectMake(0, scrollView.frame.size.height, scrollView.frame.size.width, scrollView.frame.size.height)];
+        [footerView mas_makeConstraints:^(MASConstraintMaker *make) {
+            make.left.equalTo(@(0));
+            make.right.equalTo(scrollView.mas_right);
+            make.top.equalTo(@(scrollView.contentSize.height));
+            make.height.equalTo(scrollView.mas_height);
+        }];
         [footerView initWithScrollView:scrollView Footer:stateView];
 
     }
@@ -45,13 +51,11 @@
 }
 
 - (void)initWithScrollView:(UIScrollView*)scrollView Footer:(UIView<IFXRefreshViewProtocol>*)stateView{
-    
     self.backgroundColor = [UIColor clearColor];
     
     _refScrollView = scrollView;
     _refScrollView.bounces=YES;
     _refScrollView.alwaysBounceVertical=YES;
-    _refScrollView.delegate = self;
     
     _refStateView = stateView;
     [self addSubview:_refStateView];
@@ -65,10 +69,90 @@
     }];
     
     self.state = FXRefreshStateNormal;
+    
+    [self initDelegate];
+}
+
+- (void)initDelegate{
+    [[self rac_signalForSelector:@selector(scrollViewDidScroll:) fromProtocol:@protocol(UIScrollViewDelegate)] subscribeNext:^(RACTuple*tuple) {
+        UIScrollView *scrollView = [tuple objectAtIndex:0];
+        
+        if (scrollView != _refScrollView) { return; }
+        
+        if ([self.scrollViewDelegate isFooterFullData]) {
+            [self setState:FXRefreshStateFull];
+        }else{
+            if (_state == FXRefreshStateLoading && _isLoading) {
+                CGFloat offset = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.size.height);
+                offset = MIN(offset, 0);
+                if (offset < 0) {
+                    offset = MIN(offset * -1, [_refStateView viewHeight]);
+                }
+                scrollView.fx_contentInsetBottom = offset;
+            } else if (scrollView.isDragging) {
+                CGFloat space = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.size.height;
+                
+                if (_state == FXRefreshStatePulling && space >= -[_refStateView viewHeight] && !_isLoading) {
+                    [self setState:FXRefreshStateNormal];
+                } else if (_state == FXRefreshStateNormal && space < -[_refStateView viewHeight] && !_isLoading) {
+                    [self setState:FXRefreshStatePulling];
+                }
+                if (scrollView.contentInset.bottom != 0) {
+                    scrollView.fx_contentInsetBottom = 0.0f;
+                }
+            }
+        }
+        
+        __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
+        if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidScroll:)]) {
+            [strongDelegate scrollViewDidScroll:scrollView];
+        }
+    }];
+    
+    [[self rac_signalForSelector:@selector(scrollViewDidEndDragging:willDecelerate:) fromProtocol:@protocol(UIScrollViewDelegate)] subscribeNext:^(RACTuple*tuple) {
+        UIScrollView *scrollView = [tuple objectAtIndex:0];
+        BOOL decelerate = [[tuple objectAtIndex:1] boolValue];
+        
+        if (scrollView != _refScrollView) { return; }
+        
+        FX_WEAK_REF_TYPE selfObject = self;
+        if (scrollView.contentOffset.y + scrollView.bounds.size.height - scrollView.contentSize.height >= [_refStateView viewHeight] && ![self.scrollViewDelegate isFooterFullData]) {
+            _isLoading = [self.scrollViewDelegate refreshFooterDidTriggerRefresh:^(BOOL success) {
+                if (scrollView.fx_contentInsetBottom != 0.0f) {
+                    if (success) {
+                        [selfObject setState:FXRefreshStateFinish];
+                    } else {
+                        [selfObject setState:FXRefreshStateFail];
+                    }
+                    _isLoading = NO;
+                    [UIView animateWithDuration:0.25f delay:0.5f options:UIViewAnimationOptionTransitionNone animations:^{
+                        selfObject.refScrollView.fx_contentInsetBottom = 0.0f;
+                    } completion:^(BOOL finished) {
+                        [selfObject setState:FXRefreshStateNormal];
+                    }];
+                }
+            }];
+            if (_isLoading) {
+                [self setState:FXRefreshStateLoading];
+                [UIView animateWithDuration:0.2f animations:^{
+                    scrollView.fx_contentInsetBottom = [_refStateView viewHeight];
+                }];
+            }
+        }
+        
+        __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
+        
+        if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidEndDragging:willDecelerate:)]) {
+            [strongDelegate scrollViewDidEndDragging:scrollView willDecelerate:decelerate];
+        }
+    }];
+    
+    _refScrollView.delegate = nil;
+    _refScrollView.delegate = self;
 }
 
 - (void)setState:(FXRefreshState)state{
-    if ([self.delegate isFooterFullData]) {
+    if ([self.scrollViewDelegate isFooterFullData]) {
         [_refStateView refreshState:FXRefreshStateFull];
     }else{
         [_refStateView refreshState:state];
@@ -81,38 +165,39 @@
 }
 
 #pragma mark UIScrollViewDelegate
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView{
-    if (scrollView != _refScrollView) { return; }
-    
-    if ([self.delegate isFooterFullData]) {
-        [self setState:FXRefreshStateFull];
-    }else{
-        if (_state == FXRefreshStateLoading && _isLoading) {
-            CGFloat offset = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.size.height);
-            offset = MIN(offset, 0);
-            if (offset < 0) {
-                offset = MIN(offset * -1, [_refStateView viewHeight]);
-            }
-            scrollView.fx_contentInsetBottom = offset;
-        } else if (scrollView.isDragging) {
-            CGFloat space = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.size.height;
-            
-            if (_state == FXRefreshStatePulling && space >= -[_refStateView viewHeight] && !_isLoading) {
-                [self setState:FXRefreshStateNormal];
-            } else if (_state == FXRefreshStateNormal && space < -[_refStateView viewHeight] && !_isLoading) {
-                [self setState:FXRefreshStatePulling];
-            }
-            if (scrollView.contentInset.bottom != 0) {
-                scrollView.fx_contentInsetBottom = 0.0f;
-            }
-        }
-    }
-    
-    __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
-    if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidScroll:)]) {
-        [strongDelegate scrollViewDidScroll:scrollView];
-    }
-}
+//- (void)scrollViewDidScroll:(UIScrollView *)scrollView{
+//    if (scrollView != _refScrollView) { return; }
+//    
+//
+//    if ([self.scrollViewDelegate isFooterFullData]) {
+//        [self setState:FXRefreshStateFull];
+//    }else{
+//        if (_state == FXRefreshStateLoading && _isLoading) {
+//            CGFloat offset = scrollView.contentSize.height - (scrollView.contentOffset.y + scrollView.bounds.size.height);
+//            offset = MIN(offset, 0);
+//            if (offset < 0) {
+//                offset = MIN(offset * -1, [_refStateView viewHeight]);
+//            }
+//            scrollView.fx_contentInsetBottom = offset;
+//        } else if (scrollView.isDragging) {
+//            CGFloat space = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.size.height;
+//            
+//            if (_state == FXRefreshStatePulling && space >= -[_refStateView viewHeight] && !_isLoading) {
+//                [self setState:FXRefreshStateNormal];
+//            } else if (_state == FXRefreshStateNormal && space < -[_refStateView viewHeight] && !_isLoading) {
+//                [self setState:FXRefreshStatePulling];
+//            }
+//            if (scrollView.contentInset.bottom != 0) {
+//                scrollView.fx_contentInsetBottom = 0.0f;
+//            }
+//        }
+//    }
+//    
+//    __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
+//    if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidScroll:)]) {
+//        [strongDelegate scrollViewDidScroll:scrollView];
+//    }
+//}
 
 - (void)scrollViewDidEndDecelerating:(UIScrollView *)scrollView{
     if (scrollView != _refScrollView) { return; }
@@ -148,40 +233,40 @@
         [strongDelegate scrollViewWillEndDragging:scrollView withVelocity:velocity targetContentOffset:targetContentOffset];
     }
 }
-- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate{
-    if (scrollView != _refScrollView) { return; }
-    
-    FX_WEAK_REF_TYPE selfObject = self;
-    if (scrollView.contentOffset.y + scrollView.bounds.size.height - scrollView.contentSize.height >= [_refStateView viewHeight] && ![self.delegate isFooterFullData]) {
-        _isLoading = [self.delegate refreshFooterDidTriggerRefresh:^(BOOL success) {
-            if (scrollView.fx_contentInsetBottom != 0.0f) {
-                if (success) {
-                    [selfObject setState:FXRefreshStateFinish];
-                } else {
-                    [selfObject setState:FXRefreshStateFail];
-                }
-                _isLoading = NO;
-                [UIView animateWithDuration:0.25f delay:0.5f options:UIViewAnimationOptionTransitionNone animations:^{
-                    selfObject.refScrollView.fx_contentInsetBottom = 0.0f;
-                } completion:^(BOOL finished) {
-                    [selfObject setState:FXRefreshStateNormal];
-                }];
-            }
-        }];
-        if (_isLoading) {
-            [self setState:FXRefreshStateLoading];
-            [UIView animateWithDuration:0.2f animations:^{
-                scrollView.fx_contentInsetBottom = [_refStateView viewHeight];
-            }];
-        }
-    }
-    
-    __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
-    
-    if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidEndDragging:willDecelerate:)]) {
-        [strongDelegate scrollViewDidEndDragging:scrollView willDecelerate:decelerate];
-    }
-}
+//- (void)scrollViewDidEndDragging:(UIScrollView *)scrollView willDecelerate:(BOOL)decelerate{
+//    if (scrollView != _refScrollView) { return; }
+//    
+//    FX_WEAK_REF_TYPE selfObject = self;
+//    if (scrollView.contentOffset.y + scrollView.bounds.size.height - scrollView.contentSize.height >= [_refStateView viewHeight] && ![self.scrollViewDelegate isFooterFullData]) {
+//        _isLoading = [self.scrollViewDelegate refreshFooterDidTriggerRefresh:^(BOOL success) {
+//            if (scrollView.fx_contentInsetBottom != 0.0f) {
+//                if (success) {
+//                    [selfObject setState:FXRefreshStateFinish];
+//                } else {
+//                    [selfObject setState:FXRefreshStateFail];
+//                }
+//                _isLoading = NO;
+//                [UIView animateWithDuration:0.25f delay:0.5f options:UIViewAnimationOptionTransitionNone animations:^{
+//                    selfObject.refScrollView.fx_contentInsetBottom = 0.0f;
+//                } completion:^(BOOL finished) {
+//                    [selfObject setState:FXRefreshStateNormal];
+//                }];
+//            }
+//        }];
+//        if (_isLoading) {
+//            [self setState:FXRefreshStateLoading];
+//            [UIView animateWithDuration:0.2f animations:^{
+//                scrollView.fx_contentInsetBottom = [_refStateView viewHeight];
+//            }];
+//        }
+//    }
+//    
+//    __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;
+//    
+//    if (strongDelegate && [strongDelegate respondsToSelector:@selector(scrollViewDidEndDragging:willDecelerate:)]) {
+//        [strongDelegate scrollViewDidEndDragging:scrollView willDecelerate:decelerate];
+//    }
+//}
 - (void)scrollViewWillBeginDecelerating:(UIScrollView *)scrollView{
     if (scrollView != _refScrollView) { return; }
     __strong NSObject<UIScrollViewDelegate>* strongDelegate = _scrollViewDelegate;

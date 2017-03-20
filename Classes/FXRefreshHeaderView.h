@@ -13,8 +13,6 @@
 
 @interface FXRefreshHeaderView : UIView<UIScrollViewDelegate>
 
-@property (nonatomic, weak) id<IFXRefreshDelegate> delegate;
-
 + (instancetype) refreshForScrollView:(UIScrollView*)scrollView Header:(UIView<IFXRefreshViewProtocol>*)stateView;
 
 - (void)setRefreshDelegate:(NSObject<UIScrollViewDelegate,IFXRefreshDelegate>*)delegate;

@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name         = "FXRefresh"
-  s.version      = "1.0.0"
+  s.version      = "1.0.1"
   s.summary      = "路由框架"
 
   s.homepage     = "https://github.com/zqw87699/FXRefresh"
@@ -25,5 +25,6 @@ Pod::Spec.new do |s|
   s.dependency "FXCommon/Core" 
   s.dependency "FXCommon/Extension"
   s.dependency "Masonry", '1.0.2'
+  s.dependency "ReactiveObjC", '2.1.2'
 
 end
